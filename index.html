@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Printing Ledger</title>
+  <meta name="description" content="Track customer printing deposits and page balances. Works offline." />
+  <meta name="theme-color" content="#1e293b" />
+  <link rel="manifest" href="manifest.json" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      background: #f8fafc;
+      color: #1e293b;
+      line-height: 1.5;
+    }
+
+    header {
+      background: #1e293b;
+      color: #ffffff;
+      padding: 14px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+    }
+
+    header h1 { font-size: 1.1rem; font-weight: 600; }
+
+    #net-badge {
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 999px;
+    }
+    #net-badge.online  { background: #16a34a; color: #fff; }
+    #net-badge.offline { background: #dc2626; color: #fff; }
+
+    main { max-width: 560px; margin: 0 auto; padding: 16px; }
+
+    section {
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+
+    h2 { font-size: 0.95rem; font-weight: 600; margin-bottom: 12px; }
+
+    label {
+      display: block;
+      font-size: 0.8rem;
+      font-weight: 500;
+      margin: 10px 0 4px;
+    }
+
+    input, select {
+      width: 100%;
+      padding: 9px 10px;
+      font-size: 0.95rem;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      background: #fff;
+      color: #1e293b;
+    }
+
+    button {
+      margin-top: 12px;
+      width: 100%;
+      padding: 10px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: #fff;
+      background: #1e293b;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    button:active { opacity: 0.85; }
+
+    .hint { font-size: 0.78rem; color: #64748b; margin-top: 6px; }
+
+    .msg { font-size: 0.8rem; margin-top: 10px; min-height: 1em; font-weight: 500; }
+    .msg.ok  { color: #16a34a; }
+    .msg.err { color: #dc2626; }
+
+    ul { list-style: none; }
+    li {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 0;
+      border-bottom: 1px solid #eef2f7;
+    }
+    li:last-child { border-bottom: none; }
+    li .name { font-weight: 500; }
+    li .pages { font-weight: 700; }
+    li .pages.empty { color: #dc2626; }
+    li .usd { display: block; font-size: 0.72rem; font-weight: 400; color: #64748b; }
+    li button {
+      margin: 0 0 0 10px;
+      width: auto;
+      padding: 4px 10px;
+      font-size: 0.72rem;
+      font-weight: 500;
+      background: #eef2f7;
+      color: #dc2626;
+    }
+    .empty-list { font-size: 0.85rem; color: #64748b; text-align: center; padding: 12px 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Printing Ledger</h1>
+    <span id="net-badge">Offline</span>
+  </header>
+
+  <main>
+    <section>
+      <h2>Add Customer</h2>
+      <form id="add-form">
+        <label for="cust-name">Customer Name</label>
+        <input id="cust-name" type="text" placeholder="e.g. Tendai" required autocomplete="off" />
+
+        <label for="cust-deposit">Cash Deposit ($)</label>
+        <input id="cust-deposit" type="number" step="0.01" min="0" placeholder="e.g. 10" required />
+
+        <button type="submit">Save Customer</button>
+        <p class="hint">$1 = 15 pages. A $10 deposit adds 150 pages.</p>
+        <p class="msg" id="add-msg"></p>
+      </form>
+    </section>
+
+    <section>
+      <h2>Log Printing</h2>
+      <form id="print-form">
+        <label for="print-customer">Customer</label>
+        <select id="print-customer" required>
+          <option value="">— Select a customer —</option>
+        </select>
+
+        <label for="print-pages">Pages Printed</label>
+        <input id="print-pages" type="number" min="1" step="1" placeholder="e.g. 25" required />
+
+        <button type="submit">Deduct Pages</button>
+        <p class="msg" id="print-msg"></p>
+      </form>
+    </section>
+
+    <section>
+      <h2>Balances</h2>
+      <ul id="balance-list"></ul>
+    </section>
+  </main>
+
+  <script>
+    var STORAGE_KEY = "printingLedger.customers"; // [{ name: string, pages: number }]
+    var PAGES_PER_USD = 15;
+
+    // ---------- storage ----------
+    function loadCustomers() {
+      try {
+        var raw = localStorage.getItem(STORAGE_KEY);
+        return raw ? JSON.parse(raw) : [];
+      } catch (e) {
+        return [];
+      }
+    }
+
+    function saveCustomers(list) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+    }
+
+    // ---------- badge ----------
+    function updateBadge() {
+      var badge = document.getElementById("net-badge");
+      var online = navigator.onLine;
+      badge.textContent = online ? "Online" : "Offline";
+      badge.className = online ? "online" : "offline";
+    }
+    window.addEventListener("online", updateBadge);
+    window.addEventListener("offline", updateBadge);
+
+    // ---------- add customer ----------
+    function showMsg(id, text, ok) {
+      var el = document.getElementById(id);
+      el.textContent = text;
+      el.className = "msg " + (ok ? "ok" : "err");
+      if (text) setTimeout(function () { el.textContent = ""; }, 4000);
+    }
+
+    document.getElementById("add-form").addEventListener("submit", function (e) {
+      e.preventDefault();
+      var nameEl = document.getElementById("cust-name");
+      var depEl = document.getElementById("cust-deposit");
+      var name = nameEl.value.trim();
+      var deposit = parseFloat(depEl.value);
+
+      if (!name) { showMsg("add-msg", "Enter a customer name.", false); return; }
+      if (!(deposit > 0)) { showMsg("add-msg", "Deposit must be more than $0.", false); return; }
+
+      var customers = loadCustomers();
+      for (var i = 0; i < customers.length; i++) {
+        if (customers[i].name.toLowerCase() === name.toLowerCase()) {
+          showMsg("add-msg", "A customer with that name already exists.", false);
+          return;
+        }
+      }
+
+      var pages = Math.floor(deposit * PAGES_PER_USD);
+      customers.push({ name: name, pages: pages });
+      saveCustomers(customers);
+
+      showMsg("add-msg", name + " added: " + pages + " pages ($" + deposit.toFixed(2) + ").", true);
+      nameEl.value = "";
+      depEl.value = "";
+      render();
+    });
+
+    // ---------- log printing ----------
+    document.getElementById("print-form").addEventListener("submit", function (e) {
+      e.preventDefault();
+      var selEl = document.getElementById("print-customer");
+      var pgEl = document.getElementById("print-pages");
+      var name = selEl.value;
+      var printed = parseInt(pgEl.value, 10);
+
+      if (!name) { showMsg("print-msg", "Select a customer.", false); return; }
+      if (!(printed > 0)) { showMsg("print-msg", "Pages must be at least 1.", false); return; }
+
+      var customers = loadCustomers();
+      for (var i = 0; i < customers.length; i++) {
+        if (customers[i].name === name) {
+          if (printed > customers[i].pages) {
+            showMsg("print-msg", "Not enough pages. " + name + " has " + customers[i].pages + " left.", false);
+            return;
+          }
+          customers[i].pages -= printed;
+          saveCustomers(customers);
+          showMsg("print-msg", printed + " pages deducted. " + name + " now has " + customers[i].pages + ".", true);
+          pgEl.value = "";
+          render();
+          return;
+        }
+      }
+      showMsg("print-msg", "Customer not found.", false);
+    });
+
+    // ---------- balances ----------
+    function removeCustomer(name) {
+      if (!confirm("Remove " + name + " and their balance?")) return;
+      var customers = loadCustomers().filter(function (c) { return c.name !== name; });
+      saveCustomers(customers);
+      render();
+    }
+
+    function render() {
+      var customers = loadCustomers();
+
+      // balance list
+      var list = document.getElementById("balance-list");
+      list.innerHTML = "";
+      if (customers.length === 0) {
+        list.innerHTML = '<li class="empty-list">No customers yet. Add one above.</li>';
+      } else {
+        customers.forEach(function (c) {
+          var li = document.createElement("li");
+
+          var left = document.createElement("span");
+          left.className = "name";
+          left.textContent = c.name;
+
+          var right = document.createElement("span");
+          right.className = "pages" + (c.pages === 0 ? " empty" : "");
+          right.textContent = c.pages + " pages";
+          var usd = document.createElement("span");
+          usd.className = "usd";
+          usd.textContent = "= $" + (c.pages / PAGES_PER_USD).toFixed(2) + " remaining";
+          right.appendChild(usd);
+
+          var del = document.createElement("button");
+          del.type = "button";
+          del.textContent = "Remove";
+          del.addEventListener("click", function () { removeCustomer(c.name); });
+
+          li.appendChild(left);
+          li.appendChild(right);
+          li.appendChild(del);
+          list.appendChild(li);
+        });
+      }
+
+      // print-form dropdown (keep current selection)
+      var sel = document.getElementById("print-customer");
+      var current = sel.value;
+      sel.innerHTML = '<option value="">— Select a customer —</option>';
+      customers.forEach(function (c) {
+        var opt = document.createElement("option");
+        opt.value = c.name;
+        opt.textContent = c.name + " (" + c.pages + " pages)";
+        sel.appendChild(opt);
+      });
+      if (current && customers.some(function (c) { return c.name === current; })) {
+        sel.value = current;
+      }
+    }
+
+    updateBadge();
+    render();
+
+    // ---------- service worker (offline support) ----------
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("sw.js").catch(function () {
+        /* offline install unsupported (e.g. file://) — app still works */
+      });
+    }
+  </script>
+</body>
+</html>
