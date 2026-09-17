@@ -1,9 +1,11 @@
 /* Printing Ledger — simple offline cache service worker */
-var CACHE_NAME = "printing-ledger-v1";
+var CACHE_NAME = "printing-ledger-v2";
 var ASSETS = [
   "./",
   "./index.html",
-  "./manifest.json"
+  "./manifest.json",
+  "./icon-192.png",
+  "./icon-512.png"
 ];
 
 // Install: pre-cache the app shell so it opens with no internet.
@@ -38,6 +40,21 @@ self.addEventListener("activate", function (event) {
 // fall back to the network, and cache new responses as they arrive.
 self.addEventListener("fetch", function (event) {
   if (event.request.method !== "GET") return;
+  // Navigations: network first so users get updates; fall back to cache offline.
+  if (event.request.mode === "navigate") {
+    event.respondWith(
+      fetch(event.request).then(function (response) {
+        var copy = response.clone();
+        caches.open(CACHE_NAME).then(function (cache) {
+          cache.put("./index.html", copy);
+        });
+        return response;
+      }).catch(function () {
+        return caches.match("./index.html");
+      })
+    );
+    return;
+  }
   event.respondWith(
     caches.match(event.request).then(function (cached) {
       if (cached) return cached;
